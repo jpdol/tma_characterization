@@ -1,0 +1,1005 @@
+---
+title: "SBGR TMA Characterization"
+author: "Jean P. O. Lima"
+date: "`r Sys.Date()`"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-title: Contents
+    number-sections: true
+    number-depth: 3
+    code-fold: show
+execute:
+  echo: false
+  message: false
+  warning: false
+output:
+  html_document:
+    number_sections: true
+---
+
+```{r setup, echo=FALSE, message=FALSE}
+# load packages
+library(tidyverse)
+library(ggplot2)
+library(leaflet)
+library(psych)
+library(knitr)
+library(patchwork)
+library(tibble)
+library(plotly)
+library(geosphere)
+```
+
+# Introduction
+<div style="text-align: justify;">
+This document aims to explore and characterize the traffic data of the Terminal Airspace of Guarulhos International Airport (SBGR). For this purpose, Arrival Sequencing Metering Area (ASMA) data was collected from the ICEA Performance API `http://montreal.icea.decea.mil.br:5001/api/v1/docs`.
+</div>
+
+# Experimental Data
+
+```{r data_load, message=FALSE}
+
+df_c100 <- read_csv("./raw_data/ASMA_SBGR_C100_flight.csv")
+# Considerar valores negativos para KPI08
+df_c100 <- df_c100 %>% 
+            filter(!is.na(kpi08)) %>% 
+            mutate(kpi08_val=transit-unimp_time)
+# Cria a coluna aldt em formato timestamp
+df_c100 <- df_c100 %>%
+  mutate(aldt = as.POSIXct(substr(id, 1, 18), format = "%Y-%m-%d %H:%M:%S", tz = "UTC"))
+```
+
+<div style="text-align: justify;">
+ASMA (Arrival Sequencing Metering Area) data provided by the Airspace Control Institute (ICEA) was used, covering movements destined for Guarulhos International Airport (SBGR) in January 2024. The ASMA data includes TWR information (such as landing times), flight details (such as origin and destination aerodromes), and temporal and spatial information regarding the entry of flights into the Terminal Area. The terminal airspace considered in the ASMA dataset consist of cylinders with a radius of 40 NM (C40) and 100 NM (C100) centered on SBGR. This study considered only the region within 100 NM of SBGR, as illustrated in @fig-c100-SBGR.
+</div>
+
+```{r fig-c100-SBGR, fig.cap = "SBGR C100 Terminal Airspace."}
+
+# Coordenadas do Aeroporto de Guarulhos (SBGR)
+lat_sbgr <- -23.435556
+lon_sbgr <- -46.473056
+
+# Função para criar os pontos do círculo (100 NM = 185200 metros)
+create_circle <- function(lat, lon, radius, n_points = 360) {
+  angles <- seq(0, 2 * pi, length.out = n_points)
+  circle_coords <- lapply(angles, function(angle) {
+    destPoint(c(lon, lat), angle, radius)
+  })
+  do.call(rbind, circle_coords)
+}
+
+# Gerar os pontos do círculo
+circle_coords <- create_circle(lat_sbgr, lon_sbgr, 185200)
+circle_df <- data.frame(
+  lon = circle_coords[, 1],
+  lat = circle_coords[, 2]
+)
+
+leaflet() %>%
+  addTiles() %>%  # Adicionar mapa base
+  setView(
+    lng = lon_sbgr,   # Longitude central
+    lat = lat_sbgr,   # Latitude central
+    zoom = 7          # Nível de zoom (número menor dá "zoom out")
+  ) %>%
+  addCircleMarkers(
+    data = circle_df,
+    ~lon, ~lat,
+    radius = 2,
+    color = "blue",
+    stroke = FALSE,
+    fillOpacity = 0.5
+  ) %>%
+  addCircles(
+    lng = lon_sbgr,
+    lat = lat_sbgr,
+    radius = 185200,  # Raio em metros
+    color = "blue",
+    fillOpacity = 0.2
+  )
+```
+
+<div style="text-align: justify;">
+From this data, it is possible to calculate KPI08 (Additional Time in Terminal Airspace) for movements destined for SBGR. The implementation of the KPI08 calculation followed the methodology described in MCA 100-22, where the following parameters were calculated:
+
+<ul>
+  <li><strong>Congestion Level:</strong> Number of aircraft that landed after a flight entered the terminal airspace;</li>
+  <li><strong>Transit Time:</strong> Time between a flight's entry into the terminal airspace and its landing;</li>
+  <li><strong>Unimpeded Time:</strong> Reference value for calculating additional time;</li>
+  <li><strong>KPI08:</strong> Additional Time in Terminal Airspace, calculated as the difference between transit time and unimpeded time.</li>
+</ul>
+
+To calculate the fair unimpeded time, flights are analyzed separately according to a grouping based on: Aircraft Wake Turbulence Category; Landing Runway; and Terminal Airspace Entry Sector.
+</div>
+
+## Terminal Airspace Entry Sector
+<div style="text-align: justify;">
+The terminal airspace entry sectors correspond to sections of the cylinder (C40 or C100) based on the entry point angle relative to the center. That is, each flight enters C100 with an angle θ in relation to the Aerodrome. When representing these points geographically, referring to one month of SBGR operations, we obtain the result shown in @fig-map-entry-points.
+</div>
+
+```{r fig-map-entry-points, fig.cap="Entry Coordinates in C100 of SBGR for flights in January 2024."}
+# Criar o mapa interativo com os pontos de lat e lon
+leaflet(df_c100) %>%
+  addTiles() %>%  # Adiciona o mapa base
+  addCircleMarkers(
+    ~lon, ~lat,  # Coordenadas de longitude e latitude
+    radius = 3,  # Tamanho do círculo
+    stroke = FALSE,  # Sem borda nos círculos
+    fillOpacity = 0.3  # Opacidade de preenchimento
+  )
+
+```
+
+<div style="text-align: justify;">
+From there, it is necessary to identify the entry sectors based on the density of movements that enter the cylinder. To understand this behavior, an interesting graphical aid is a histogram of the entry angles into the terminal area, presented in @fig-hist-bear.
+</div>
+
+```{r fig-hist-bear, fig.cap="Histogram of entry angle in C100 of SBGR."}
+# Criar o histograma com ggplot2
+ggplot(df_c100, aes(x = bear)) +
+  geom_histogram(binwidth = 10, color = "black", position = "identity", alpha = 0.7) +
+  labs(x = "Entry Angle",
+       y = "Movements") +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+<div style="text-align: justify;">
+From the @fig-hist-bear, it is visible, through the movement density pattern in some sections of the cylinder, that there are four well-defined entry sectors. To identify these sectors, the DBSCAN clustering technique was applied to the intersection coordinates between each flight's trajectory and C100. The @fig-map-entry-points-dbscan shows the clustering result geographically, where the coordinates are color-coded by the identified sector.
+</div>
+
+```{r fig-map-entry-points-dbscan, fig.cap="Histogram of entry angle in C100 of SBGR after clustering with DBSCAN."}
+# Criar uma paleta de cores para os setores
+pal <- colorFactor(palette = "Set1", domain = df_c100$sector)
+
+# Criar o mapa interativo com os pontos de lat e lon
+leaflet(df_c100) %>%
+  addTiles() %>%  # Adiciona o mapa base
+  addCircleMarkers(
+    ~lon, ~lat,  # Coordenadas de longitude e latitude
+    color = ~pal(sector),  # Usar a paleta para as cores dos círculos
+    radius = 3,  # Tamanho do círculo
+    stroke = FALSE,  # Sem borda nos círculos
+    fillOpacity = 0.3,  # Opacidade de preenchimento
+    popup = ~paste("Sector:", sector)  # Exibe o sector ao clicar no ponto
+  ) %>%
+  addLegend(
+    position = "topright",  # Posição da legenda
+    pal = pal,  # Usar a mesma paleta
+    values = df_c100$sector,  # Valores para as classes
+    title = "Sector"
+  )
+
+```
+
+<div style="text-align: justify;">
+The @fig-hist-bear-dbscan displays the histogram of entry angles in C100 after sector identification. Points clustered as sector `-1` are considered noise, meaning they were not grouped with any entry sector.
+</div>
+
+```{r fig-hist-bear-dbscan, fig.cap="Entry Coordinates in C100 of SBGR after clustering with DBSCAN."}
+# Criar o histograma com ggplot2
+ggplot(df_c100, aes(x = bear, fill = as.factor(sector))) +
+  geom_histogram(binwidth = 10, color = "black", position = "identity", alpha = 0.7) +
+  labs(x = "Entry Angle",
+       y = "Movements",
+       fill = "Sector") +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+# Basic Descriptive Statistics
+
+```{r}
+kable(describe(df_c100[,c("congestion","transit","percentile_20","kpi08_p20","unimp_time","kpi08_val")]))
+```
+
+
+# Transit time and KPI08 Characterization
+
+## Distribution
+
+```{r}
+p_transit <- ggplot(df_c100, aes(x = transit)) +
+  geom_histogram(binwidth = 1, fill = "skyblue", color = "black", alpha = 0.7) +  # Histograma
+  geom_vline(aes(xintercept = mean(transit, na.rm = TRUE), color = "Média"), 
+             linetype = "dashed", linewidth = 1, show.legend = TRUE) +  # Linha da média com legenda
+  geom_vline(aes(xintercept = median(transit, na.rm = TRUE), color = "Mediana"), 
+             linetype = "dashed", linewidth = 1, show.legend = TRUE) +  # Linha da mediana com legenda
+  labs(title = "Histograma de Tempo de Trânsito",
+       x = "Tempo de Trânsito",
+       y = "Movimentos") +
+  scale_color_manual(name = "",
+                     values = c("Média" = "red", "Mediana" = "blue"),
+                     labels = c(paste("Média: ", round(mean(df_c100$transit, na.rm = TRUE), 2)),
+                                paste("Mediana: ", round(median(df_c100$transit, na.rm = TRUE), 2)))) +  # Adicionar valores de mean e median na legenda
+  theme_minimal()
+
+
+p_kpi08 <- ggplot(df_c100, aes(x = kpi08_val)) +
+  geom_histogram(binwidth = 1, fill = "skyblue", color = "black", alpha = 0.7) +  # Histograma
+  geom_vline(aes(xintercept = mean(kpi08_val, na.rm = TRUE), color = "Média"), 
+             linetype = "dashed", linewidth = 1, show.legend = TRUE) +  # Linha da média com legenda
+  geom_vline(aes(xintercept = median(kpi08_val, na.rm = TRUE), color = "Mediana"), 
+             linetype = "dashed", linewidth = 1, show.legend = TRUE) +  # Linha da mediana com legenda
+  labs(title = "Histograma de KPI08",
+       x = "KPI08",
+       y = "Movimentos") +
+  scale_color_manual(name = "",
+                     values = c("Média" = "red", "Mediana" = "blue"),
+                     labels = c(paste("Média: ", round(mean(df_c100$kpi08_val, na.rm = TRUE), 2)),
+                                paste("Mediana: ", round(median(df_c100$kpi08_val, na.rm = TRUE), 2)))) +  # Adicionar valores de mean e median na legenda
+  theme_minimal()
+
+p_transit / p_kpi08
+```
+
+
+## Temporal Analysis
+
+### Movements per day
+
+
+```{r}
+# Extrair a data (sem a hora) para agrupar os voos por dia
+df_c100 <- df_c100 %>%
+  mutate(date = as.Date(aldt))
+
+# Calcular o tempo de trânsito médio e o KPI08 médio por dia
+df_avg_metrics <- df_c100 %>%
+  group_by(date) %>%
+  summarise(avg_transit = mean(transit, na.rm = TRUE),
+            avg_kpi08 = mean(kpi08_val, na.rm = TRUE))
+
+transform_index <- 11
+
+ggplot(df_c100, aes(x = date)) +
+  geom_bar(stat = "count", fill = "skyblue", color = "black", alpha = 0.7) +
+  geom_line(data = df_avg_metrics, aes(x = date, y = avg_transit*transform_index, color = "Tempo de Trânsito Médio"), size = 1, linetype = "solid") +
+  geom_line(data = df_avg_metrics, aes(x = date, y = avg_kpi08*transform_index, color = "KPI08 Médio"), size = 1, linetype = "solid") +
+  scale_y_continuous(
+    name = "Número de Movimentos",
+    sec.axis = sec_axis(~ . / transform_index, name = "Minutos")   # Ajuste da escala do eixo secundário
+  ) +
+  scale_color_manual(values = c("Tempo de Trânsito Médio" = "red", "KPI08 Médio" = "darkgreen")) +  # Definindo as cores
+  labs(color = "", x="Data") +  # Título da legenda
+  theme_minimal()
+
+
+  
+```
+
+
+### Movements per hour
+
+```{r}
+# Extrair a hora para agrupar os voos por hora
+df_c100 <- df_c100 %>%
+  mutate(hour = hour(aldt))
+
+# Calcular o tempo de trânsito médio e o KPI08 médio por hora
+df_avg_metrics_hourly <- df_c100 %>%
+  group_by(hour) %>%
+  summarise(avg_transit = mean(transit, na.rm = TRUE),
+            avg_kpi08 = mean(kpi08_val, na.rm = TRUE),
+            count = n())
+
+transform_index <- .5
+
+# Criar o gráfico por hora
+ggplot(df_avg_metrics_hourly, aes(x = hour)) +
+  geom_bar(aes(y = count/31), stat = "identity", fill = "skyblue", color = "black", alpha = 0.7) +
+  geom_line(aes(y = avg_transit * transform_index, color = "Tempo de Trânsito Médio"), size = 1, linetype = "solid") +
+  geom_line(aes(y = avg_kpi08 * transform_index, color = "KPI08 Médio"), size = 1, linetype = "solid") +
+  scale_y_continuous(
+    name = "Média de Movimentos",
+    sec.axis = sec_axis(~ . / transform_index, name = "Minutos")   # Ajuste da escala do eixo secundário
+  ) +
+  scale_color_manual(values = c("Tempo de Trânsito Médio" = "red", "KPI08 Médio" = "darkgreen")) +  # Definindo as cores
+  labs(color = "", x = "Hora do Dia") +  # Título da legenda
+  theme_minimal()
+```
+
+
+
+# TMA Occupation
+
+A análise de ocupação foi feita utilizando a variável `Nível de Congestionamento` que informa o números de voos que estão ocupando o espaço aéreo da terminal para cada voo que cruza o C100.
+
+## Distribution
+
+```{r}
+ggplot(df_c100, aes(x = congestion)) +
+  geom_histogram(binwidth = 1, fill = "skyblue", color = "black", alpha = 0.7) +  # Histograma
+  geom_vline(aes(xintercept = mean(congestion, na.rm = TRUE), color = "Mean"), 
+             linetype = "twodash", linewidth = 1, show.legend = TRUE) +  # Linha da média com legenda
+  geom_vline(aes(xintercept = median(congestion, na.rm = TRUE), color = "Median"), 
+             linetype = "dotted", linewidth = 1, show.legend = TRUE) +  # Linha da mediana com legenda
+  geom_vline(aes(xintercept = min(congestion, na.rm = TRUE), color = "Min"), 
+             linetype = "solid", linewidth = 1, show.legend = TRUE) +  # Linha do mínimo com legenda
+  geom_vline(aes(xintercept = max(congestion, na.rm = TRUE), color = "Max"), 
+             linetype = "solid", linewidth = 1, show.legend = TRUE) +  # Linha do máximo com legenda
+  labs(title = "Congestion Histogram",
+       x = "Num. of flights into TMA at ALET",
+       y = "Freq") +
+  scale_color_manual(name = "",
+                     values = c("Mean" = "red", 
+                                "Median" = "blue", 
+                                "Min" = "green", 
+                                "Max" = "purple"),
+                     breaks = c("Mean", "Median", "Min", "Max"),  # Define a ordem na legenda
+                     labels = c(paste("Mean: ", round(mean(df_c100$congestion, na.rm = TRUE), 2)),
+                                paste("Median: ", round(median(df_c100$congestion, na.rm = TRUE), 2)),
+                                paste("Min: ", round(min(df_c100$congestion, na.rm = TRUE), 2)),
+                                paste("Max: ", round(max(df_c100$congestion, na.rm = TRUE), 2)))) +  # Adicionar valores na legenda
+  theme_minimal()
+
+
+```
+## Occupation per hour
+
+```{r}
+# Extrair a hora para agrupar os voos por hora
+df_c100 <- df_c100 %>%
+  mutate(hour = hour(aldt))
+
+# Calcular o tempo de trânsito médio e o KPI08 médio por hora
+df_avg_metrics_hourly <- df_c100 %>%
+  group_by(hour) %>%
+  summarise(avg_transit = mean(transit, na.rm = TRUE),
+            avg_kpi08 = mean(kpi08_val, na.rm = TRUE),
+            avg_congestion = mean(congestion, na.rm = TRUE),
+            count = n())
+
+transform_index <- .5
+
+# Criar o gráfico por hora
+ggplot(df_avg_metrics_hourly, aes(x = hour)) +
+  geom_bar(aes(y = count/31), stat = "identity", fill = "skyblue", color = "black", alpha = 0.7) +
+  geom_line(aes(y = avg_transit * transform_index, color = "Average Transit Time"), size = 1, linetype = "solid") +
+  geom_line(aes(y = avg_kpi08 * transform_index, color = "Average KPI08"), size = 1, linetype = "solid") +
+  geom_line(aes(y = avg_congestion * transform_index, color = "Average Congestion"), size = 1, linetype = "solid") +
+  scale_y_continuous(
+    name = "Average Movements",
+    sec.axis = sec_axis(~ . / transform_index, name = "Minutes")   # Ajuste da escala do eixo secundário
+  ) +
+  scale_color_manual(values = c("Average Transit Time" = "red", 
+                                "Average KPI08" = "darkgreen",
+                                "Average Congestion" = "darkblue"
+                                )) +  # Definindo as cores
+  labs(color = "", x = "Hour of the Day") +  # Título da legenda
+  theme_minimal()
+```
+
+## Distribution per hour
+
+```{r}
+ggplot(df_c100, aes(x = as.factor(hour), y = congestion)) +
+  geom_boxplot(fill = "skyblue", color = "black", alpha = 0.7) +  # Violin plot
+  # stat_summary(fun = "mean", geom = "point", shape = 18, color = "red", size = 3) +  # Média
+  labs(title = "Congestion by Hour of Day",
+       x = "Hour of Day",
+       y = "Congestion") +
+  theme_minimal()
+```
+
+
+
+# Sector Analysis
+## Transit Time per sector
+
+```{r}
+ggplot(df_c100 %>% filter(sector!=-1), aes(x = as.factor(sector), y = transit)) +
+  geom_boxplot(fill = "skyblue", color = "black", alpha = 0.7) +  # Violin plot
+  labs(title = "Transit Time by Sector",
+       x = "Sector",
+       y = "Transit Time (minutes)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1))  # Rotacionar rótulos no eixo X
+```
+
+## KPI08 per sector
+
+```{r}
+ggplot(df_c100 %>% filter(sector!=-1), aes(x = as.factor(sector), y = kpi08_val)) +
+  geom_boxplot(fill = "skyblue", color = "black", alpha = 0.7) +  # Violin plot
+  labs(title = "Transit Time by Sector",
+       x = "Sector",
+       y = "Transit Time (minutes)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1))  # Rotacionar rótulos no eixo X
+
+```
+## TMA Usage per sector
+
+```{r}
+# Exemplo de dataframe df_c100 com a coluna 'aldt' contendo timestamps
+df_c100 <- df_c100 %>%
+  mutate(hour_of_day = hour(aldt),   # Extrair a hora do dia
+         sector = factor(sector))    # Garantir que 'sector' é um fator
+
+# Contar o número de voos por hora para cada setor (ao longo de todo o período)
+df_counts <- df_c100 %>%
+  group_by(hour_of_day, sector) %>%
+  summarise(flight_count = n(), .groups = "drop")
+
+# Calcular a média de voos por hora ao longo de todos os dias para cada setor
+df_avg_counts <- df_counts %>%
+  group_by(hour_of_day, sector) %>%
+  summarise(mean_flights = flight_count/31, .groups = "drop")
+
+```
+
+```{r}
+# Criando o gráfico interativo com plotly
+plot_ly(data = df_avg_counts,
+        x = ~hour_of_day,  # Eixo X
+        y = ~mean_flights,  # Eixo Y
+        color = ~sector,  # Preenchimento por setor
+        type = 'bar') %>%  # Tipo de gráfico: barras
+  layout(title = "Number of Flights by Hour of Day and Sector",
+         xaxis = list(title = "Hour of Day", 
+                      tickvals = 0:23),  # Exibir todas as horas no eixo X
+         yaxis = list(title = "Average Number of Flights"),  # Título do eixo Y
+         barmode = 'stack',  # Barras empilhadas
+         legend = list(title = list(text = "Sector")),  # Título da legenda
+         margin = list(b = 80),  # Ajuste de margem para o eixo X
+         plot_bgcolor = 'rgba(0,0,0,0)',  # Fundo transparente
+         paper_bgcolor = 'rgba(0,0,0,0)')  # Fundo do papel transparente
+```
+```{r}
+# # Reorganizar para criar a tabela (linhas: horas, colunas: setores)
+# df_pivot <- df_avg_counts %>%
+#   pivot_wider(names_from = sector, values_from = mean_flights, values_fill = list(mean_flights = 0))
+# 
+# # Transformar 'hour_of_day' em índice da tabela df_pivot
+# df_pivot_indexed <- df_pivot %>%
+#   column_to_rownames(var = "hour_of_day")
+# 
+# # Arredondar os valores numéricos para 2 casas decimais
+# df_pivot_indexed_rounded <- df_pivot_indexed %>%
+#   mutate(across(where(is.numeric), ~round(., 2)))
+# 
+# # Exibir a tabela com a coluna 'hour_of_day' como índice
+# kable(df_pivot_indexed_rounded)
+```
+
+### Day 2024-01-05
+
+```{r}
+# Exemplo de dataframe df_c100 com a coluna 'aldt' contendo timestamps
+df_c100_one_day <- df_c100 %>%
+  filter(date(aldt)=='2024-01-05') %>% 
+  mutate(hour_of_day = hour(aldt),   # Extrair a hora do dia
+         sector = factor(sector))   # Garantir que 'sector' é um fator
+
+# Contar o número de voos por hora para cada setor (ao longo de todo o período)
+df_counts <- df_c100_one_day %>%
+  group_by(hour_of_day, sector) %>%
+  summarise(flight_count = n(), .groups = "drop")
+
+# Calcular a média de voos por hora ao longo de todos os dias para cada setor
+df_avg_counts <- df_counts %>%
+  group_by(hour_of_day, sector) %>%
+  summarise(mean_flights = flight_count, .groups = "drop")
+
+```
+
+```{r}
+plot_ly(data = df_avg_counts,
+        x = ~hour_of_day,  # Eixo X
+        y = ~mean_flights,  # Eixo Y
+        color = ~sector,  # Agrupamento por setor
+        type = 'bar'  # Gráfico de barras
+        ) %>% 
+  layout(title = "Number of Flights by Hour of Day and Sector",
+         xaxis = list(title = "Hour of Day", tickvals = 0:23),  # Configuração do eixo X
+         yaxis = list(title = "Average Number of Flights"),  # Configuração do eixo Y
+         barmode = 'stack',  # Barras empilhadas
+         legend = list(title = list(text = "Sector")),  # Título da legenda
+         margin = list(b = 80))  # Ajuste de margem para rótulos do eixo X
+```
+
+
+```{r}
+# # Reorganizar para criar a tabela (linhas: horas, colunas: setores)
+# df_pivot <- df_avg_counts %>%
+#   pivot_wider(names_from = sector, values_from = mean_flights, values_fill = list(mean_flights = 0))
+# 
+# # Transformar 'hour_of_day' em índice da tabela df_pivot
+# df_pivot_indexed <- df_pivot %>%
+#   column_to_rownames(var = "hour_of_day")
+# 
+# # Exibir a tabela com a coluna 'hour_of_day' como índice
+# kable(df_pivot_indexed)
+```
+
+## Congestion per sector
+
+```{r}
+# Converter 'c_time' para timestamp
+df_c100$c_time_ts <- as.POSIXct(df_c100$c_time / 1000, origin = "1970-01-01")
+
+write_csv(df_c100, "./proc_data/df_c100.csv")
+```
+
+```{python}
+# import polars as pl
+# 
+# # Carregando o DataFrame
+# file_path = "./proc_data/df_c100.csv"
+# df = pl.read_csv(file_path)
+# 
+# # Obtendo valores únicos dos setores
+# unique_sectors = df.select("sector").unique().to_series()
+# 
+# print("Number of flights: ", df.height)
+# 
+# # Criando uma lista para armazenar os resultados
+# results = []
+# 
+# # Convertendo colunas para arrays para acelerar o acesso
+# df_id = df["id"].to_numpy()
+# df_ctime = df["c_time"].to_numpy()
+# df_atot = df["atot"].to_numpy()
+# df_sector = df["sector"].to_numpy()
+# 
+# # Iterando para calcular o congestionamento
+# for i in range(df.height):
+#     ref_id = df_id[i]
+#     print(f"Flight {i} - {ref_id}")
+#     ref_ctime = df_ctime[i]
+#     congestion = {str(sector): 0 for sector in unique_sectors}
+# 
+#     # Comparando apenas os voos relevantes
+#     mask = (df_ctime < ref_ctime) & (ref_ctime < df_atot)
+#     relevant_flights = df.filter(mask)
+# 
+#     # Contabilizando o congestionamento por setor
+#     for sector in relevant_flights["sector"].to_numpy():
+#         congestion[str(sector)] += 1
+# 
+#     # Adicionando o resultado para o voo atual
+#     result_row = {"id": ref_id, **congestion}
+#     results.append(result_row)
+# 
+# # Convertendo a lista de resultados para um DataFrame Polars
+# results_df = pl.DataFrame(results)
+# 
+# # Salvando os resultados em CSV
+# output_path = "./proc_data/congestion_per_sector.csv"
+# results_df.write_csv(output_path)
+# 
+# print(f"Congestion data saved to {output_path}")
+```
+
+```{r}
+congestion_per_sector <- read.csv("./proc_data/congestion_per_sector.csv")
+congestion_per_sector <- merge(congestion_per_sector, df_c100, by = "id")
+
+
+# Filtrar os dados para a data específica
+filtered_data <- congestion_per_sector %>%
+  filter(aldt > "2024-01-05" & aldt < "2024-01-06")
+
+# Transformar os dados para o formato longo
+long_data <- filtered_data %>%
+  select(id, X3, X0, X1, X.1, X2) %>%
+  pivot_longer(cols = c(X3, X0, X1, X.1, X2), 
+               names_to = "variable", 
+               values_to = "value")
+
+# Alterar os nomes das variáveis
+long_data <- long_data %>%
+  mutate(variable = recode(variable,
+                           X0 = "Setor 0",
+                           X1 = "Setor 1",
+                           X.1 = "Setor -1",
+                           X2 = "Setor 2",
+                           X3 = "Setor 3"))
+
+# Transformar `id` em fator para ordenar adequadamente no gráfico
+long_data <- long_data %>%
+  mutate(id = factor(id, levels = unique(id)))  # Preserva a ordem original dos IDs
+
+# Criar o gráfico de área
+ggplot(long_data, aes(x = id, y = value, fill = variable, group = variable)) +
+  geom_area(position = "stack") +
+  labs(title = "Congestionamento por setor para cada voo em 2024-01-05",
+       x = "",
+       y = "Congestion",
+       fill = "Sectors") +  # Atualiza o rótulo da legenda
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        panel.grid.major.x = element_blank())
+```
+
+# Runway usage
+
+```{r}
+ggplot(df_c100, aes(x = drwy)) +
+  geom_bar(fill = "skyblue", color = "black", alpha = 0.7) +
+  labs(title = "Arrival Runway Usage",
+       x = "Runway",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1))  # Rotacionar rótulos no eixo X
+
+```
+
+## Transit Time distribution per RWY
+
+```{r}
+#| message: false
+
+# Calcular a média por 'drwy'
+df_c100_means <- df_c100 %>%
+  group_by(drwy) %>%
+  summarise(mean_transit = mean(transit, na.rm = TRUE))
+
+# Criar o gráfico
+ggplot(df_c100, aes(x = transit)) +
+  geom_histogram(fill = "skyblue", color = "black", alpha = 0.7) +  # Histograma
+  facet_wrap(~ drwy, scales = "free_y") +  # Facetas por 'drwy', com escala livre no eixo Y
+  geom_vline(data = df_c100_means, aes(xintercept = mean_transit), color = "red", linetype = "dashed", size = 1) +  # Linha da média
+  geom_text(data = df_c100_means, aes(x = Inf, y = Inf, label = paste("Mean: ", round(mean_transit, 2))), 
+            color = "red", hjust = 1.2, vjust = 14, size = 3) +  # Adicionar o valor da média no gráfico, no canto superior direito
+  labs(title = "Histograms of Transit Time by RWY",
+       x = "Transit Time (minutes)",
+       y = "Frequency") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1))  # Ajustar rotação dos rótulos do eixo X
+```
+
+```{r}
+ggplot(df_c100, aes(x = drwy, y = transit)) +
+  geom_boxplot(fill = "skyblue", color = "black", alpha = 0.7) +  # Violin plot
+  labs(title = "Transit Time by RWY",
+       x = "RWY",
+       y = "Transit Time (minutes)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1))  # Ajustar rotação dos rótulos do eixo X
+```
+
+
+## KPI08 distribution per RWY
+
+```{r}
+#| message: false
+
+# Calcular a média por 'drwy'
+df_c100_means <- df_c100 %>%
+  group_by(drwy) %>%
+  summarise(mean_kpi08 = mean(kpi08_val, na.rm = TRUE))
+
+# Criar o gráfico
+ggplot(df_c100, aes(x = kpi08_val)) +
+  geom_histogram(fill = "skyblue", color = "black", alpha = 0.7) +  # Histograma
+  facet_wrap(~ drwy, scales = "free_y") +  # Facetas por 'drwy', com escala livre no eixo Y
+  geom_vline(data = df_c100_means, aes(xintercept = mean_kpi08), color = "red", linetype = "dashed", size = 1) +  # Linha da média
+  geom_text(data = df_c100_means, aes(x = Inf, y = Inf, label = paste("Mean: ", round(mean_kpi08, 2))), 
+            color = "red", hjust = 1.2, vjust = 14, size = 3) +  # Adicionar o valor da média no gráfico, no canto superior direito
+  labs(title = "Histograms of KPI08 by DRWY",
+       x = "Transit Time (minutes)",
+       y = "Frequency") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Ajustar rotação dos rótulos do eixo X
+```
+
+```{r}
+ggplot(df_c100, aes(x = drwy, y = kpi08_val)) +
+  geom_boxplot(fill = "skyblue", color = "black", alpha = 0.7) +  # Violin plot
+  labs(title = "Violin Plot of KPI08 by DRWY",
+       x = "DRWY",
+       y = "Transit Time (minutes)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1))  # Ajustar rotação dos rótulos do eixo X
+
+```
+
+
+# Sector x Runway
+
+## Transit Time per sector and runway
+
+```{r}
+ggplot(df_c100 %>% filter(sector!=-1), aes(x = interaction(sector, drwy), y = transit)) +
+  geom_boxplot(fill = "lightblue", color = "black", alpha = 0.7) +  # Violin plot
+  labs(title = "Transit Time by Sector and DRWY",
+       x = "Sector and DRWY Combination",
+       y = "Transit Time (minutes)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotacionar rótulos no eixo X
+```
+
+
+## KPI08 per sector and runway
+
+```{r}
+ggplot(df_c100 %>% filter(sector!=-1), aes(x = interaction(sector, drwy), y = kpi08_val)) +
+  geom_boxplot(fill = "lightblue", color = "black", alpha = 0.7) +  # Violin plot
+  labs(title = "Transit Time by Sector and DRWY",
+       x = "Sector and DRWY Combination",
+       y = "Transit Time (minutes)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotacionar rótulos no eixo X
+```
+
+
+
+
+
+# Congestion per Flight (Time Series)
+
+## Day 2024-01-05
+
+```{r}
+df_c100_one_day <- df_c100 %>%
+  filter(date(aldt) == '2024-01-05') %>% 
+  mutate(hour_of_day = hour(aldt),   # Extrair a hora do dia
+         sector = factor(sector),    # Garantir que 'sector' é um fator
+         c_time_ts = as.POSIXct(c_time / 1000, origin = "1970-01-01", tz = "UTC")) %>%  # Converter epoch (milissegundos) para timestamp
+  arrange(aldt) %>% # Ordena por aldt
+  select(c_time_ts, congestion, sector)
+
+```
+
+```{r}
+# Criar o gráfico ggplot
+plot_gg <- ggplot(df_c100_one_day, aes(x = c_time_ts, y = congestion)) +
+  geom_line(color = "lightgray", size = 0.5, linetype = "dashed", alpha = 0.5) +  # Linha tracejada conectando os pontos
+  geom_point(aes(color = sector), size = 1.5, alpha = 0.8) +    # Pontos coloridos por setor
+  labs(
+    title = "Congestion Time Series by ASMA Sector",
+    x = "Date/Time (ALET)",
+    y = "Congestion",
+    color = "Sector"
+  ) +
+  theme_minimal() +  # Estilo minimalista
+  scale_color_brewer(palette = "Set1")  # Paleta de cores
+
+# Converter para um gráfico interativo com plotly
+ggplotly(plot_gg)
+```
+
+
+# Class Analysis
+
+```{r}
+ggplot(df_c100, aes(x = CLASS)) +
+  geom_bar(fill = "skyblue", color = "black", alpha = 0.7) +
+  labs(title = "Bar Plot of Class",
+       x = "Class",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1))  # Rotacionar rótulos no eixo X
+
+```
+
+## Transit Time distribution per Class
+
+```{r}
+#| message: false
+
+# Calcular a média por 'CLASS'
+df_c100_means <- df_c100 %>%
+  group_by(CLASS) %>%
+  summarise(mean_transit = mean(transit, na.rm = TRUE))
+
+# Criar o gráfico
+ggplot(df_c100, aes(x = transit)) +
+  geom_histogram(fill = "skyblue", color = "black", alpha = 0.7) +  # Histograma
+  facet_wrap(~ CLASS, scales = "free_y") +  # Facetas por 'CLASS', com escala livre no eixo Y
+  geom_vline(data = df_c100_means, aes(xintercept = mean_transit), color = "red", linetype = "dashed", size = 1) +  # Linha da média
+  geom_text(data = df_c100_means, aes(x = Inf, y = Inf, label = paste("Mean: ", round(mean_transit, 2))), 
+            color = "red", hjust = 1.2, vjust = 14, size = 3) +  # Adicionar o valor da média no gráfico, no canto superior direito
+  labs(title = "Histograms of Transit Time by CLASS",
+       x = "Transit Time (minutes)",
+       y = "Frequency") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1))  # Ajustar rotação dos rótulos do eixo X
+```
+
+```{r}
+ggplot(df_c100, aes(x = CLASS, y = transit)) +
+  geom_boxplot(fill = "skyblue", color = "black", alpha = 0.7) +  # Violin plot
+  labs(title = "Box Plot of Transit Time by CLASS",
+       x = "CLASS",
+       y = "Transit Time (minutes)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1))  # Ajustar rotação dos rótulos do eixo X
+```
+
+## KPI distribution per Class
+
+```{r}
+#| message: false
+
+# Calcular a média por 'CLASS'
+df_c100_means <- df_c100 %>%
+  group_by(CLASS) %>%
+  summarise(mean_kpi08 = mean(kpi08_val, na.rm = TRUE))
+
+# Criar o gráfico
+ggplot(df_c100, aes(x = kpi08_val)) +
+  geom_histogram(fill = "skyblue", color = "black", alpha = 0.7) +  # Histograma
+  facet_wrap(~ CLASS, scales = "free_y") +  # Facetas por 'CLASS', com escala livre no eixo Y
+  geom_vline(data = df_c100_means, aes(xintercept = mean_kpi08), color = "red", linetype = "dashed", size = 1) +  # Linha da média
+  geom_text(data = df_c100_means, aes(x = Inf, y = Inf, label = paste("Mean: ", round(mean_kpi08, 2))), 
+            color = "red", hjust = 1.2, vjust = 14, size = 3) +  # Adicionar o valor da média no gráfico, no canto superior direito
+  labs(title = "Histograms of KPI08 by CLASS",
+       x = "Transit Time (minutes)",
+       y = "Frequency") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1))  # Ajustar rotação dos rótulos do eixo X
+```
+
+```{r}
+ggplot(df_c100, aes(x = CLASS, y = kpi08_val)) +
+  geom_boxplot(fill = "skyblue", color = "black", alpha = 0.7) +  # Violin plot
+  labs(title = "Violin Plot of KPI08 by DRWY",
+       x = "CLASS",
+       y = "Transit Time (minutes)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1))  # Ajustar rotação dos rótulos do eixo X
+
+```
+
+
+## Transit Time per sector and class
+
+```{r}
+ggplot(df_c100 %>% filter(sector!=-1), aes(x = interaction(sector, CLASS), y = transit)) +
+  geom_boxplot(fill = "lightblue", color = "black", alpha = 0.7) +  # Violin plot
+  labs(title = "Transit Time by Sector and DRWY",
+       x = "Sector and CLASS Combination",
+       y = "Transit Time (minutes)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1))  # Rotacionar rótulos no eixo X
+
+```
+
+
+## KPI08 per sector and class
+
+```{r}
+ggplot(df_c100 %>% filter(sector!=-1), aes(x = interaction(sector, CLASS), y = kpi08_val)) +
+  geom_boxplot(fill = "lightblue", color = "black", alpha = 0.7) +  # Violin plot
+  labs(title = "Transit Time by Sector and CLASS",
+       x = "Sector and CLASS Combination",
+       y = "Transit Time (minutes)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1))  # Rotacionar rótulos no eixo X
+```
+
+
+
+
+```{r}
+# Exemplo de dataframe df_c100 com a coluna 'aldt' contendo timestamps
+df_c100 <- df_c100 %>%
+  mutate(hour_of_day = hour(aldt),   # Extrair a hora do dia
+         sector = factor(sector))    # Garantir que 'sector' é um fator
+
+# Contar o número de voos por hora, setor e CLASS (ao longo de todo o período)
+df_counts <- df_c100 %>%
+  group_by(hour_of_day, sector, CLASS) %>%
+  summarise(flight_count = n(), .groups = "drop")
+
+# Calcular a média de voos por hora ao longo de todos os dias para cada setor e CLASS
+df_avg_counts <- df_counts %>%
+  group_by(hour_of_day, sector, CLASS) %>%
+  summarise(mean_flights = flight_count / 31, .groups = "drop")
+```
+
+```{r}
+ggplot(df_avg_counts, aes(x = hour_of_day, y = mean_flights, fill = CLASS)) +
+  geom_bar(stat = "identity", position = "stack") +  # Barra agrupada por setor
+  labs(title = "Number of Flights by Hour of Day and Sector",
+       x = "Hour of Day",
+       y = "Average Number of Flights") +
+  scale_x_continuous(breaks = 0:23) +  # Mostrar todas as horas do dia
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1))  # Ajustar rotação dos rótulos do eixo X
+```
+
+```{r}
+ggplot(df_avg_counts, aes(x = hour_of_day, y = mean_flights, fill = sector)) +
+  geom_bar(stat = "identity", position = "stack") +  # Barra empilhada por setor
+  labs(title = "Number of Flights by Hour of Day, Sector, and CLASS",
+       x = "Hour of Day",
+       y = "Average Number of Flights") +
+  scale_x_continuous(breaks = 0:23) +  # Mostrar todas as horas do dia
+  facet_wrap(~ CLASS, ncol = 1) +  # Organizar as facetas em uma coluna vertical
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1))  # Ajustar rotação dos rótulos do eixo X
+
+```
+
+
+## Congestion per Flight (Time Series) considering CLASS and ASMA Sector
+
+### Day 2024-01-05
+
+```{r}
+df_c100_one_day <- df_c100 %>%
+  filter(date(aldt) == '2024-01-05') %>% 
+  mutate(hour_of_day = hour(aldt),   # Extrair a hora do dia
+         sector = factor(sector),    # Garantir que 'sector' é um fator
+         c_time_ts = as.POSIXct(c_time / 1000, origin = "1970-01-01", tz = "UTC")) %>%  # Converter epoch (milissegundos) para timestamp
+  arrange(aldt) %>% # Ordena por aldt
+  select(c_time_ts, congestion, sector, CLASS)
+
+```
+
+```{r}
+# Criar o gráfico ggplot
+plot_gg <- ggplot(df_c100_one_day, aes(x = c_time_ts, y = congestion)) +
+  geom_line(color = "lightgray", size = 1, linetype = "dashed", alpha = 0.5) +  # Linha tracejada conectando os pontos
+  geom_point(aes(shape = CLASS, color = sector), size = 1.5, alpha = 0.8) +    # Usar formas diferentes para CLASS
+  labs(
+    title = "Congestion Time Series by ASMA Sector",
+    x = "Date/Time (ALET)",
+    y = "Congestion",
+    color = "Sector",
+    shape = "CLASS"
+  ) +
+  theme_minimal() +  # Estilo minimalista
+  scale_shape_manual(values = c(16, 17, 18)) +  # Definir formas específicas para as classes
+  scale_color_brewer(palette = "Set1")  # Paleta de cores para sector
+
+# Converter para um gráfico interativo com plotly
+ggplotly(plot_gg)
+```
+
+
+
+
+# Interval between landings
+
+```{r}
+# Ordenar o dataframe pelo horário de pouso
+df_c100 <- df_c100[order(df_c100$aldt), ]
+
+# Converter a coluna `aldt` para o formato de data-hora, se necessário
+df_c100$aldt <- as.POSIXct(df_c100$aldt)
+
+# Calcular os intervalos de tempo entre pousos (em segundos)
+intervalos <- diff(df_c100$aldt)
+
+# Converter os intervalos para minutos
+intervalos_min <- as.numeric(intervalos, units = "mins")
+
+# Plotar o histograma
+hist(intervalos_min,
+     breaks = 50, # Ajuste o número de bins conforme necessário
+     main = "Histograma de Intervalos entre Pousos",
+     xlab = "Intervalo de Tempo entre Pousos (minutos)",
+     col = "skyblue",
+     border = "black")
+
+
+```
+
+```{r}
+# Remover os intervalos iguais a 0
+intervalos_min_sem_zero <- intervalos_min[intervalos_min != 0]
+
+# Calcular estatísticas sem os valores zero
+media_intervalos <- mean(intervalos_min_sem_zero, na.rm = TRUE)
+desvio_padrao <- sd(intervalos_min_sem_zero, na.rm = TRUE)
+percentil_1 <- quantile(intervalos_min_sem_zero, probs = 0.01, na.rm = TRUE)
+percentil_99 <- quantile(intervalos_min_sem_zero, probs = 0.99, na.rm = TRUE)
+
+# Criar a tabela
+tabela_estatisticas <- data.frame(
+  Estatística = c("Média", "Desvio Padrão", "Percentil 1", "Percentil 99"),
+  Valor = c(media_intervalos, desvio_padrao, percentil_1, percentil_99)
+)
+
+# Imprimir a tabela
+kable(tabela_estatisticas)
+```
+
+
