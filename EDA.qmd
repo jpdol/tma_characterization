@@ -33,9 +33,10 @@ library(geosphere)
 ```
 
 # Introduction
-<div style="text-align: justify;">
+
+::: {style="text-align: justify;"}
 This document aims to explore and characterize the traffic data of the Terminal Airspace of Guarulhos International Airport (SBGR). For this purpose, Arrival Sequencing Metering Area (ASMA) data was collected from the ICEA Performance API `http://montreal.icea.decea.mil.br:5001/api/v1/docs`.
-</div>
+:::
 
 # Experimental Data
 
@@ -51,9 +52,9 @@ df_c100 <- df_c100 %>%
   mutate(aldt = as.POSIXct(substr(id, 1, 18), format = "%Y-%m-%d %H:%M:%S", tz = "UTC"))
 ```
 
-<div style="text-align: justify;">
+::: {style="text-align: justify;"}
 ASMA (Arrival Sequencing Metering Area) data provided by the Airspace Control Institute (ICEA) was used, covering movements destined for Guarulhos International Airport (SBGR) in January 2024. The ASMA data includes TWR information (such as landing times), flight details (such as origin and destination aerodromes), and temporal and spatial information regarding the entry of flights into the Terminal Area. The terminal airspace considered in the ASMA dataset consist of cylinders with a radius of 40 NM (C40) and 100 NM (C100) centered on SBGR. This study considered only the region within 100 NM of SBGR, as illustrated in @fig-c100-SBGR.
-</div>
+:::
 
 ```{r fig-c100-SBGR, fig.cap = "SBGR C100 Terminal Airspace."}
 
@@ -101,23 +102,29 @@ leaflet() %>%
   )
 ```
 
-<div style="text-align: justify;">
+::: {style="text-align: justify;"}
 From this data, it is possible to calculate KPI08 (Additional Time in Terminal Airspace) for movements destined for SBGR. The implementation of the KPI08 calculation followed the methodology described in MCA 100-22, where the following parameters were calculated:
 
 <ul>
-  <li><strong>Congestion Level:</strong> Number of aircraft that landed after a flight entered the terminal airspace;</li>
-  <li><strong>Transit Time:</strong> Time between a flight's entry into the terminal airspace and its landing;</li>
-  <li><strong>Unimpeded Time:</strong> Reference value for calculating additional time;</li>
-  <li><strong>KPI08:</strong> Additional Time in Terminal Airspace, calculated as the difference between transit time and unimpeded time.</li>
+
+<li><strong>Congestion Level:</strong> Number of aircraft that landed after a flight entered the terminal airspace;</li>
+
+<li><strong>Transit Time:</strong> Time between a flight's entry into the terminal airspace and its landing;</li>
+
+<li><strong>Unimpeded Time:</strong> Reference value for calculating additional time;</li>
+
+<li><strong>KPI08:</strong> Additional Time in Terminal Airspace, calculated as the difference between transit time and unimpeded time.</li>
+
 </ul>
 
 To calculate the fair unimpeded time, flights are analyzed separately according to a grouping based on: Aircraft Wake Turbulence Category; Landing Runway; and Terminal Airspace Entry Sector.
-</div>
+:::
 
 ## Terminal Airspace Entry Sector
-<div style="text-align: justify;">
+
+::: {style="text-align: justify;"}
 The terminal airspace entry sectors correspond to sections of the cylinder (C40 or C100) based on the entry point angle relative to the center. That is, each flight enters C100 with an angle θ in relation to the Aerodrome. When representing these points geographically, referring to one month of SBGR operations, we obtain the result shown in @fig-map-entry-points.
-</div>
+:::
 
 ```{r fig-map-entry-points, fig.cap="Entry Coordinates in C100 of SBGR for flights in January 2024."}
 # Criar o mapa interativo com os pontos de lat e lon
@@ -132,9 +139,9 @@ leaflet(df_c100) %>%
 
 ```
 
-<div style="text-align: justify;">
+::: {style="text-align: justify;"}
 From there, it is necessary to identify the entry sectors based on the density of movements that enter the cylinder. To understand this behavior, an interesting graphical aid is a histogram of the entry angles into the terminal area, presented in @fig-hist-bear.
-</div>
+:::
 
 ```{r fig-hist-bear, fig.cap="Histogram of entry angle in C100 of SBGR."}
 # Criar o histograma com ggplot2
@@ -146,9 +153,9 @@ ggplot(df_c100, aes(x = bear)) +
   theme(legend.position = "top")
 ```
 
-<div style="text-align: justify;">
+::: {style="text-align: justify;"}
 From the @fig-hist-bear, it is visible, through the movement density pattern in some sections of the cylinder, that there are four well-defined entry sectors. To identify these sectors, the DBSCAN clustering technique was applied to the intersection coordinates between each flight's trajectory and C100. The @fig-map-entry-points-dbscan shows the clustering result geographically, where the coordinates are color-coded by the identified sector.
-</div>
+:::
 
 ```{r fig-map-entry-points-dbscan, fig.cap="Histogram of entry angle in C100 of SBGR after clustering with DBSCAN."}
 # Criar uma paleta de cores para os setores
@@ -174,9 +181,9 @@ leaflet(df_c100) %>%
 
 ```
 
-<div style="text-align: justify;">
+::: {style="text-align: justify;"}
 The @fig-hist-bear-dbscan displays the histogram of entry angles in C100 after sector identification. Points clustered as sector `-1` are considered noise, meaning they were not grouped with any entry sector.
-</div>
+:::
 
 ```{r fig-hist-bear-dbscan, fig.cap="Entry Coordinates in C100 of SBGR after clustering with DBSCAN."}
 # Criar o histograma com ggplot2
@@ -194,7 +201,6 @@ ggplot(df_c100, aes(x = bear, fill = as.factor(sector))) +
 ```{r}
 kable(describe(df_c100[,c("congestion","transit","percentile_20","kpi08_p20","unimp_time","kpi08_val")]))
 ```
-
 
 # Transit time and KPI08 Characterization
 
@@ -235,11 +241,9 @@ p_kpi08 <- ggplot(df_c100, aes(x = kpi08_val)) +
 p_transit / p_kpi08
 ```
 
-
 ## Temporal Analysis
 
 ### Movements per day
-
 
 ```{r}
 # Extrair a data (sem a hora) para agrupar os voos por dia
@@ -270,7 +274,6 @@ ggplot(df_c100, aes(x = date)) +
   
 ```
 
-
 ### Movements per hour
 
 ```{r}
@@ -300,8 +303,6 @@ ggplot(df_avg_metrics_hourly, aes(x = hour)) +
   labs(color = "", x = "Hora do Dia") +  # Título da legenda
   theme_minimal()
 ```
-
-
 
 # TMA Occupation
 
@@ -337,6 +338,7 @@ ggplot(df_c100, aes(x = congestion)) +
 
 
 ```
+
 ## Occupation per hour
 
 ```{r}
@@ -384,9 +386,8 @@ ggplot(df_c100, aes(x = as.factor(hour), y = congestion)) +
   theme_minimal()
 ```
 
-
-
 # Sector Analysis
+
 ## Transit Time per sector
 
 ```{r}
@@ -411,6 +412,7 @@ ggplot(df_c100 %>% filter(sector!=-1), aes(x = as.factor(sector), y = kpi08_val)
   theme(axis.text.x = element_text(hjust = 1))  # Rotacionar rótulos no eixo X
 
 ```
+
 ## TMA Usage per sector
 
 ```{r}
@@ -448,6 +450,7 @@ plot_ly(data = df_avg_counts,
          plot_bgcolor = 'rgba(0,0,0,0)',  # Fundo transparente
          paper_bgcolor = 'rgba(0,0,0,0)')  # Fundo do papel transparente
 ```
+
 ```{r}
 # # Reorganizar para criar a tabela (linhas: horas, colunas: setores)
 # df_pivot <- df_avg_counts %>%
@@ -500,7 +503,6 @@ plot_ly(data = df_avg_counts,
          legend = list(title = list(text = "Sector")),  # Título da legenda
          margin = list(b = 80))  # Ajuste de margem para rótulos do eixo X
 ```
-
 
 ```{r}
 # # Reorganizar para criar a tabela (linhas: horas, colunas: setores)
@@ -662,7 +664,6 @@ ggplot(df_c100, aes(x = drwy, y = transit)) +
   theme(axis.text.x = element_text(hjust = 1))  # Ajustar rotação dos rótulos do eixo X
 ```
 
-
 ## KPI08 distribution per RWY
 
 ```{r}
@@ -698,7 +699,6 @@ ggplot(df_c100, aes(x = drwy, y = kpi08_val)) +
 
 ```
 
-
 # Sector x Runway
 
 ## Transit Time per sector and runway
@@ -713,7 +713,6 @@ ggplot(df_c100 %>% filter(sector!=-1), aes(x = interaction(sector, drwy), y = tr
   theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotacionar rótulos no eixo X
 ```
 
-
 ## KPI08 per sector and runway
 
 ```{r}
@@ -725,10 +724,6 @@ ggplot(df_c100 %>% filter(sector!=-1), aes(x = interaction(sector, drwy), y = kp
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotacionar rótulos no eixo X
 ```
-
-
-
-
 
 # Congestion per Flight (Time Series)
 
@@ -762,7 +757,6 @@ plot_gg <- ggplot(df_c100_one_day, aes(x = c_time_ts, y = congestion)) +
 # Converter para um gráfico interativo com plotly
 ggplotly(plot_gg)
 ```
-
 
 # Class Analysis
 
@@ -846,7 +840,6 @@ ggplot(df_c100, aes(x = CLASS, y = kpi08_val)) +
 
 ```
 
-
 ## Transit Time per sector and class
 
 ```{r}
@@ -860,7 +853,6 @@ ggplot(df_c100 %>% filter(sector!=-1), aes(x = interaction(sector, CLASS), y = t
 
 ```
 
-
 ## KPI08 per sector and class
 
 ```{r}
@@ -872,9 +864,6 @@ ggplot(df_c100 %>% filter(sector!=-1), aes(x = interaction(sector, CLASS), y = k
   theme_minimal() +
   theme(axis.text.x = element_text(hjust = 1))  # Rotacionar rótulos no eixo X
 ```
-
-
-
 
 ```{r}
 # Exemplo de dataframe df_c100 com a coluna 'aldt' contendo timestamps
@@ -917,7 +906,6 @@ ggplot(df_avg_counts, aes(x = hour_of_day, y = mean_flights, fill = sector)) +
 
 ```
 
-
 ## Congestion per Flight (Time Series) considering CLASS and ASMA Sector
 
 ### Day 2024-01-05
@@ -952,9 +940,6 @@ plot_gg <- ggplot(df_c100_one_day, aes(x = c_time_ts, y = congestion)) +
 # Converter para um gráfico interativo com plotly
 ggplotly(plot_gg)
 ```
-
-
-
 
 # Interval between landings
 
@@ -1001,5 +986,3 @@ tabela_estatisticas <- data.frame(
 # Imprimir a tabela
 kable(tabela_estatisticas)
 ```
-
-
